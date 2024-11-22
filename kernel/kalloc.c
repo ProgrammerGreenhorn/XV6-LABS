@@ -23,6 +23,10 @@ struct {
   struct run *freelist;
 } kmem;
 
+/*
+init the memory allocator, kmem.freelist is a linked list of free pages
+PHYSTOP is the end of the physical memory
+*/
 void
 kinit()
 {
@@ -30,6 +34,9 @@ kinit()
   freerange(end, (void*)PHYSTOP);
 }
 
+/*
+free the range of physical memory [pa_start, pa_end)
+*/
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -55,7 +62,7 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-
+  // add the page to the freelist
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
@@ -79,4 +86,18 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+/*
+travesal the freelist and count the number of free pages
+*/
+uint64 free_mem(void){
+  struct run *r;
+  uint64 count = 0;
+  acquire(&kmem.lock);
+  for(r = kmem.freelist; r; r = r->next){
+     ++count;
+  }
+  release(&kmem.lock);
+  return count * PGSIZE;
 }

@@ -304,6 +304,8 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
+  /* copy mask */
+  np->mask = p->mask;
 
   release(&np->lock);
 
@@ -653,4 +655,20 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// return the number of processes in the system
+uint64
+proc_count(void){
+  struct proc *p;
+  uint64 count = 0;
+  /* traverse all process */
+  for(p = proc; p < proc + NPROC; ++p){
+    acquire(&p->lock);
+    if(p->state != UNUSED){
+      count++;
+    }
+    release(&p->lock);
+  }
+  return count;
 }
