@@ -81,6 +81,38 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  // lab3 . page access
+  uint64 va;
+  uint64 dst;
+  int len;
+  if(argaddr(0,&va) < 0 || argint(1, &len) < 0 || argaddr(2,&dst) < 0){
+    return -1;
+  }
+  if(len > 64 || len < 0){
+    return -1;
+  }
+  // bitmask return ro user space 
+  uint64 bitmask = 0,mask = 1;
+  pte_t *pte;
+  pagetable_t pagetable = myproc->pagetable;
+  while(len > 0){
+    // the third level pte 
+    pte = walk(pagetable,va,1);
+    if(pte){
+      // accessed
+      if(*pte & PTE_A){
+        bitmask |= mask;
+      }
+      // clear that bit
+      *pte = *pte &(~PTE_A);
+    }
+    mask <<= 1;
+    va= (uint64)((char*)(va) + PGSIZE);
+    --len;
+  }
+  if(copyout(pagetable,dst,(char*)&bitmask,sizeof(bitmask)) < 0){
+    return -1;
+  }
   return 0;
 }
 #endif
@@ -101,7 +133,6 @@ uint64
 sys_uptime(void)
 {
   uint xticks;
-
   acquire(&tickslock);
   xticks = ticks;
   release(&tickslock);
