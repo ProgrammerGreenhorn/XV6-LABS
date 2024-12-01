@@ -94,7 +94,7 @@ sys_pgaccess(void)
   // bitmask return ro user space 
   uint64 bitmask = 0,mask = 1;
   pte_t *pte;
-  pagetable_t pagetable = myproc->pagetable;
+  pagetable_t pagetable = myproc()->pagetable;
   while(len > 0){
     // the third level pte 
     pte = walk(pagetable,va,1);
