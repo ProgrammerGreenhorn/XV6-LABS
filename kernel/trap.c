@@ -75,6 +75,20 @@ usertrap(void)
 
   if(p->killed)
     exit(-1);
+  // lab 4 alarm, every cpu tick, xv6 will send a timer interupt 
+  // jump here to handle it 
+  if(which_dev == 2){
+    ++p->passedticks;
+    if(p->interval != 0 && p->passedticks == p->interval){
+      // save regs, skip one trapframe to avoid overwrite the trapframe
+      p->trapframecopy=p->trapframe + 1;
+      memmove(p->trapframecopy,p->trapframe,sizeof(struct trapframe));
+       // execute handler when return ro user space
+       // set epc to the hanlder, so when return to user space
+       // it will execute
+      p->trapframe->epc =  p->handler;
+    }
+  }
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)

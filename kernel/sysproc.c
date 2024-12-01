@@ -70,6 +70,8 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  // lab4. backtrace
+  backtrace();
   return 0;
 }
 
@@ -94,4 +96,32 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+// lab4 alarm
+uint64 sys_sigalarm(void){
+  int interval;
+  uint64 handler;
+  struct proc *p;
+  if(argint(0, &interval) < 0 || argaddr(1,&handler) < 0 || interval < 0){
+    return -1;
+  }
+  p = myproc();
+  p->interval = interval;
+  p->handler = handler;
+  p->passedticks = 0; // reset
+  return 0;
+}
+// lab4 alarm 
+// every time the handler excute once,
+// it will call sigreturn, so here to restore the regs
+uint64 sys_sigreturn(void){
+  struct proc *p = myproc();
+  if(p->trapframecopy != p->trapframe + 1){
+    return -1;
+  }
+  // restore
+  memmove(p->trapframe, p->trapframecopy, sizeof(struct trapframe));
+  p->passedticks = 0; // reset
+  p->trapframecopy = 0;
+  return p->trapframe->a0;
 }
