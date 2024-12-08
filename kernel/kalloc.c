@@ -35,8 +35,16 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    // lab5, here we need to init the ref cnt of each page to 1, because in kfree, we will dec the cnt once,
+    // this will be called when kernel init
+    if(incref((uint64)p) >= 0){
+      kfree(p);
+    }else{
+      panic("freerange incref");
+    }
+  }
+    
 }
 
 // Free the page of physical memory pointed at by v,
@@ -47,15 +55,18 @@ void
 kfree(void *pa)
 {
   struct run *r;
-
+  int cnt;
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
-
+  // lab5. dec the ref cnt of pa,until it is 0, then free it
+  if((cnt = decref((uint64)pa)) < 0)
+    panic("kfree decref");
+  // cnt not reach 0, return
+  if(cnt > 0)
+    return;
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
   r = (struct run*)pa;
-
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
@@ -75,7 +86,14 @@ kalloc(void)
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
-
+  // lab5. init page's ref cnt to 1
+  // r may be 0 when no free page, need to check
+  if(r){
+    if(incref((uint64)r) < 0){
+      panic("kalloc incref");
+    }
+  }
+  
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;

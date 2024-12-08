@@ -78,23 +78,25 @@ kvminithart()
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
 pte_t *
-walk(pagetable_t pagetable, uint64 va, int alloc)
-{
+walk(pagetable_t pagetable, uint64 va, int alloc){
   if(va >= MAXVA)
-    panic("walk");
-
-  for(int level = 2; level > 0; level--) {
-    pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) {
+     panic("walk");
+  for(int level = 2;level > 0;--level){
+    // get the pte of the current level
+    pte_t *pte = &pagetable[PX(level,va)];
+    if(*pte & PTE_V){
       pagetable = (pagetable_t)PTE2PA(*pte);
-    } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
-        return 0;
-      memset(pagetable, 0, PGSIZE);
-      *pte = PA2PTE(pagetable) | PTE_V;
+  }else{
+    // if the pte is not valid, allocate a new page table
+    if(!alloc || (pagetable = kalloc()) == 0){
+      return 0;
     }
+    memset(pagetable, 0, PGSIZE);
+    // set the pte of the current level to the new page table
+    *pte = PA2PTE(pagetable) | PTE_V;
   }
-  return &pagetable[PX(0, va)];
+}
+    return &pagetable[PX(0,va)];
 }
 
 // Look up a virtual address, return the physical address,
@@ -119,6 +121,50 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pa = PTE2PA(*pte);
   return pa;
 }
+
+// lab5, basicallly the same as walkaddr, but with cow
+uint64 walkcowaddr(pagetable_t pagetable,uint64 va){
+  pte_t *pte;
+  uint64 pa;
+  char *mem;
+  uint flags;
+
+  if(va >= MAXVA){
+    return 0;
+  }
+  // when cow happens, the pagetable is already allocated
+  // so alloc is 0, we do not need to allocate
+  // what we should do is allocate a new page, copy the content, 
+  // and change the last level pte to the new page
+  pte = walk(pagetable,va,0);
+  if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+                    return 0;
+  
+  // before the *pte is pointing to the same pyhsical page shared by parent and child
+  // now we need to check if the page is cow, if it is, we need to allocate a new page, and copy the content
+  pa = PTE2PA(*pte);
+  if((*pte & PTE_W) == 0){
+    // pte without cow flag can not allocate
+    if((*pte & PTE_COW) == 0 || (mem = kalloc()) == 0){
+      return 0;
+    }
+    // copy the content to the new page
+    memmove(mem,(void*)pa,PGSIZE);
+    // clear cow and add write bit
+    flags = (PTE_FLAGS(*pte) & (~PTE_COW)) | PTE_W;
+    // unmap the old page
+    uvmunmap(pagetable,PGROUNDDOWN(va),1,1);
+    // map the new page
+    if(mappages(pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      return 0;
+    }
+    // return the new page's physical address
+    return (uint64)mem;
+  }
+  return pa;
+}
+
 
 // add a mapping to the kernel page table.
 // only used when booting.
@@ -150,6 +196,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
       return -1;
     if(*pte & PTE_V)
       panic("mappages: remap");
+    // walk() return the third level pte, we modify it to store the physical address
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -182,6 +229,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    // change the old pte to 0
     *pte = 0;
   }
 }
@@ -303,22 +351,33 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
-
+  // char *mem;
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // lab5. clear PTE_W and add cow flag
+    flags = (PTE_FLAGS(*pte) & (~PTE_W)) | PTE_COW;
+    // update old pte's flag to cow and clear write bit
+    *pte =(*pte & ~PTE_W) | PTE_COW; 
+    // lab5. not allocate new page
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    
+    // map child's page table to parent's physical page,
+    // currenly the child and parent share the same physical page
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
+    // increate ref cnt
+    if(incref(pa) < 0){
+      panic("ucmcopy incref");
+    }
+
   }
   return 0;
 
@@ -350,7 +409,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    // lab5. cow
+    pa0 = walkcowaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);

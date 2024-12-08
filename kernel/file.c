@@ -13,6 +13,9 @@
 #include "stat.h"
 #include "proc.h"
 
+// device interface map
+// every devsw has its own read and write function
+// eg: console 's read and write mapping to consoleread and consolewrite
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
