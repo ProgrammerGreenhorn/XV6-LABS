@@ -400,7 +400,7 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
-  // lab8-1, search in doubly indirect blocks
+  // lab9-1, search in doubly indirect blocks
   bn-= NINDIRECT;
   if(bn < NDOUBLEINDIRECT){
     // the index in the first indirect blocks
@@ -459,7 +459,7 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
-  // lab8-1, clear the double indirect
+  // lab9-1, clear the double indirect
   if(ip->addrs[NDIRECT+1]){
     bp = bread(ip->dev,ip->addrs[NDIRECT+1]);
     a = (uint*)bp->data;

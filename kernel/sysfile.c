@@ -283,6 +283,37 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+// lab9-2, follow the symlink to find the real file
+static struct inode * follow_symlink(struct inode *ip){
+  // record inum we have visited to avoid cycle
+  uint64 inums[MAXSYMLINK];
+  int i,j;
+  char target[MAXPATH];
+  for(i = 0; i < MAXSYMLINK;++i){
+    inums[i] = ip->inum;
+    if((readi(ip,0,(uint64)target,0,MAXPATH)) <= 0){
+      iunlockput(ip);
+      return 0;
+    }
+    iunlockput(ip);
+    //get the inode of target path
+    if((ip = namei(target)) == 0){
+      return 0;
+    }
+    for(j = 0;j <= i;++j){
+      // has cycle
+      if(ip->inum == inums[j]){
+        return 0;
+      }
+    }
+    ilock(ip);
+    // not symlink, we can return now
+    if(ip->type != T_SYMLINK)
+       return ip;
+  }
+  return 0;
+}
+
 uint64
 sys_open(void)
 {
@@ -320,6 +351,14 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+  // lab9-2
+  if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){
+    // symlink and user need to follow in
+    if((ip = follow_symlink(ip)) == 0){
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -482,5 +521,31 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// lab9-2
+uint64 sys_symlink(void){
+  char target[MAXPATH],path[MAXPATH];
+  struct inode * ip;
+  int n;
+  if( (n = argstr(0,target,MAXPATH)) < 0 || argstr(1,path,MAXPATH) < 0){
+     return -1;
+  }
+  begin_op();
+  // create the symlink file
+  if((ip = create(path,T_SYMLINK,0,0)) == 0){
+    end_op();
+    return -1;
+  }
+  // write the target to the file's data block
+  if(writei(ip,0,(uint64)target,0,n) != n){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  // after use, dec the ref cnt
+  iunlockput(ip);
+  end_op();
   return 0;
 }
