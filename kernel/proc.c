@@ -3,8 +3,12 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -300,6 +304,14 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+  
+  //lab10 copy all the vma information
+  for(i = 0; i < MAXVMA; i++){
+    if(p->vmas[i].addr){
+      np->vmas[i] = p->vmas[i];
+      filedup(np->vmas[i].f);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -340,10 +352,51 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
+  // lab10
+  int i;
+  struct vma* v;
+  uint maxsz = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
+  uint64 va;
+  uint n, n1, r;
 
   if(p == initproc)
     panic("init exiting");
 
+  // unmap the mapped memory - lab10
+  for (i = 0; i < MAXVMA; ++i) {
+    if (!p->vmas[i].addr) {
+      continue;
+    }
+    v = &p->vmas[i];
+    if ((v->flags & MAP_SHARED)) {
+      for (va =v->addr; va < v->addr + v->length; va += PGSIZE) {
+        pte_t *pte = walk(p->pagetable, va, 0);
+        if (pte == 0 || (*pte & PTE_D) == 0)
+          continue;
+        n = PGSIZE > v->addr + v->length - va ? v->addr + v->length - va : PGSIZE;
+        for (r = 0; r < n; r += n1) {
+          n1 = maxsz > n-i ? n-i : maxsz;
+          begin_op();
+          ilock(v->f->ip);
+          if (writei(v->f->ip, 1, va + i, va - v->addr + v->offset + i, n1) != n1) {
+            iunlock(v->f->ip);
+            end_op();
+            panic("exit: writei failed");
+          }
+          iunlock(v->f->ip);
+          end_op();
+        }
+      }
+    }
+    uvmunmap(p->pagetable, v->addr, (v->length - 1) / PGSIZE + 1, 1);
+    v->addr = 0;
+    v->length = 0;
+    v->offset = 0;
+    v->flags = 0;
+    v->offset = 0;
+    fileclose(v->f);
+    v->f = 0;
+  }
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
@@ -352,12 +405,10 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
-
   begin_op();
   iput(p->cwd);
   end_op();
   p->cwd = 0;
-
   acquire(&wait_lock);
 
   // Give any children to init.
@@ -377,7 +428,6 @@ exit(int status)
   sched();
   panic("zombie exit");
 }
-
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
@@ -421,11 +471,9 @@ wait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
-  }
-}
+  }}
 
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.

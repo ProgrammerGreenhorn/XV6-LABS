@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
+
 
 struct spinlock tickslock;
 uint ticks;
@@ -35,7 +40,7 @@ trapinithart(void)
 //
 void
 usertrap(void)
-{
+{ 
   int which_dev = 0;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
@@ -65,9 +70,64 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  }else if(r_scause()==12 || r_scause() == 13 || r_scause() == 15){
+    void * pa;
+    // page fault address happen
+    uint64 va = r_stval();
+    // align the page fault address to the page boundary
+    va = PGROUNDDOWN(va);
+    struct vma *v = 0;
+    int flags = PTE_U;
+    // check whether the page fault address is happened in mmaped region
+    int i;
+    for(i = 0;i < MAXVMA;++i){
+      if(p->vmas[i].addr && va >= p->vmas[i].addr && va < p->vmas[i].addr + p->vmas[i].length){
+        v = &p->vmas[i];
+        break;
+      }
+    }
+    if(!v)
+      goto err;
+    // set the pte's permission flags
+    if(r_scause() == 15 && (v->prot & PROT_WRITE) && walkaddr(p->pagetable,va)){
+        pte_t *pte = walk(p->pagetable,va,0);
+        if(pte == 0)
+           goto err;
+        *pte |= PTE_W | PTE_D;
+    }else{
+      // allocate a page,and map the file content to the page
+      if((pa = kalloc()) == 0)
+           goto err;
+      memset(pa,0,PGSIZE);
+      ilock(v->f->ip);
+      if(readi(v->f->ip,0,(uint64)pa,va - v->addr + v->offset,PGSIZE) < 0){
+        iunlock(v->f->ip);
+        kfree(pa);
+        goto err;
+      }
+      iunlock(v->f->ip);
+      if(v->prot & PROT_READ){
+        flags |= PTE_R;
+      }
+      // rscase 15 means write page fault,so we need to set the page to be writable
+      // and dirty
+      if(r_scause() == 15 && (v->prot & PROT_WRITE)){
+         flags |= PTE_W | PTE_D;
+      }
+      if(v->prot & PROT_EXEC){
+        flags |= PTE_X;
+      }
+      if(mappages(p->pagetable,va,PGSIZE,(uint64)pa,flags) != 0){
+        kfree(pa);
+        goto err;
+      }
+    }
+  } 
+  else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  else {
+err:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

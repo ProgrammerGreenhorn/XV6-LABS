@@ -279,10 +279,8 @@ fork_test(void)
     munmap(p1, PGSIZE); // just the first page
     exit(0); // tell the parent that the mapping looks OK.
   }
-
   int status = -1;
   wait(&status);
-
   if(status != 0){
     printf("fork_test failed\n");
     exit(1);

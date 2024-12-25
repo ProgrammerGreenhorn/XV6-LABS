@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -481,6 +482,124 @@ sys_pipe(void)
     fileclose(rf);
     fileclose(wf);
     return -1;
+  }
+  return 0;
+}
+
+uint64
+sys_mmap(void){
+  printf("in sysmap\n");
+  uint64 addr;
+  int length,prot,flags,offset;
+  struct proc *p = myproc();
+  struct file *f;
+  struct vma *v = 0;
+  int i;
+  if(argaddr(0,&addr) < 0 || argint(1,&length) < 0 || argint(2,&prot) < 0 || argint(3,&flags) < 0 || argfd(4, 0, &f) < 0 || argint(5,&offset) < 0)
+    return -1;
+
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+  
+  // if the file is not readable, then the prot should not have PROT_READ
+  if(flags == MAP_SHARED && !f->writable &&(prot & PROT_WRITE))
+    return -1;
+
+  if(length < 0 || offset < 0 || offset % PGSIZE)
+    return -1;
+
+  // find the first available vma
+  for(i = 0; i < MAXVMA; i++){
+    if(!p->vmas[i].addr){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(!v)
+    return -1;
+  addr = MINMMAPADDR;
+  // find the max available address
+  for(i = 0; i < MAXVMA; i++){
+    if(p->vmas[i].addr){
+      addr = addr > p->vmas[i].addr + p->vmas[i].length ? addr : p->vmas[i].addr + p->vmas[i].length;
+    }
+  }
+  // align the address
+  addr = PGROUNDUP(addr);
+  // check if the address is valid
+  if(addr +length > TRAPFRAME)
+    return -1;
+  
+  v->addr = addr;
+  v->length = length;
+  v->prot = prot;
+  v->flags = flags;
+  v->offset = offset;
+  v->f = f;
+  // inc ref count
+  filedup(f);
+  return addr;
+}
+
+uint64 sys_munmap(void){
+  uint64 addr,va;
+  int length;
+  struct proc *p = myproc();
+  struct vma *v = 0;
+  uint max_sz,n,n1;
+  int i;
+  if(argaddr(0,&addr) < 0 || argint(1,&length) < 0 || addr % PGSIZE || length < 0)
+             return -1;
+  for(i = 0; i < MAXVMA; ++i){
+     if(p->vmas[i].addr && addr >= p->vmas[i].addr && addr +length <= p->vmas[i].addr + p->vmas[i].length){
+       v = &p->vmas[i];
+       break;
+     }
+  }
+  if(!v)
+    return -1;
+
+  if(length == 0)
+    return 0;
+  // only write back the dirty page
+  if(v->flags & MAP_SHARED){
+    max_sz = ((MAXOPBLOCKS-1-1-2)/2) * BSIZE;
+    for(va = addr;va < addr + length;va += PGSIZE){
+      pte_t *pte = walk(p->pagetable,va,0);
+      if(pte == 0 || (*pte &PTE_D) == 0)
+        continue;
+      n = PGSIZE > addr + length - va ? addr + length - va : PGSIZE;
+      for(i = 0;i < n;i += n1){
+        n1 = max_sz > n - i ? n - i : max_sz;
+        begin_op();
+        ilock(v->f->ip);
+        if(writei(v->f->ip,1,va + i, va - v->addr + v->offset + i,n1) != n1){
+          iunlock(v->f->ip);
+          end_op();
+          return -1;
+        }
+        iunlock(v->f->ip);
+        end_op();
+      }
+     }      
+    }
+    // unmap the pagetable's entry
+    uvmunmap(p->pagetable,addr,(length-1)/PGSIZE + 1, 1);
+
+    // free the vma
+    if(addr == v->addr && length == v->length){
+      v->addr = 0;
+      v->length = 0;
+      v->prot = 0;
+      v->flags = 0;
+      fileclose(v->f);
+      v->f = 0;
+    }else if(addr == v->addr){
+      v->addr += length;
+      v->length -= length;
+      v->offset += length;
+    }else if(addr + length == v->addr + v->length){
+      v->length -= length;
   }
   return 0;
 }
