@@ -401,19 +401,20 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
   // lab9-1, search in doubly indirect blocks
-  bn-= NINDIRECT;
+  bn -= NINDIRECT;
   if(bn < NDOUBLEINDIRECT){
     // the index in the first indirect blocks
     // need to / NINDIRECT,and in the second should % NINDIRECT
     uint first_idx = bn / NINDIRECT;
     uint second_idx = bn % NINDIRECT;
     if((addr = ip->addrs[NDIRECT+1]) == 0)     // not allocated
-      ip->addrs[NDIRECT+1] = balloc(ip->dev);  
+      addr = ip->addrs[NDIRECT+1] = balloc(ip->dev);  
     // the first indirect block
-    bp = bread(ip->dev,ip->addrs[NDIRECT+1]);
+    bp = bread(ip->dev,addr);
     a = (uint*)bp->data;
     if((addr = a[first_idx]) == 0){
       a[first_idx] = balloc(ip->dev);
+      // buffer modified, write back to disk
       log_write(bp);
     }
     // here need to relse, or the buffer will run ouf of space
